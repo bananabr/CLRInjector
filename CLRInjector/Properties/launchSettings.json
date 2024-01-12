@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "CLRInjector": {
+      "commandName": "Project",
+      "commandLineArgs": "nordvpn --jit-inject C:\\Users\\danie\\source\\repos\\payloads\\shellcode\\calc.x64.bin Newtonsoft.Json.Serialization.JsonSerializerInternalReader.Deserialize"
+    }
+  }
+}
