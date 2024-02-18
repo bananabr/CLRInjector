@@ -51,25 +51,53 @@ namespace CLRHeapWalker
 
         public const int mdcHasNonVtableSlot = 0x0008;
 
+        enum WFLAGS2_ENUM
+        {
+            enum_flag_MultipurposeSlotsMask = 0x001F,
+            enum_flag_HasPerInstInfo = 0x0001,
+            enum_flag_HasInterfaceMap = 0x0002,
+            enum_flag_HasDispatchMapSlot = 0x0004,
+            enum_flag_HasNonVirtualSlots = 0x0008,
+            enum_flag_HasModuleOverride = 0x0010,
+            enum_flag_HasModuleDependencies = 0x0080,
+            enum_flag_IsIntrinsicType = 0x0100,
+            enum_flag_HasCctor = 0x0400,
+            enum_flag_HasVirtualStaticMethods = 0x0800,
+            enum_flag_RequiresAlign8 = 0x1000,
+            enum_flag_HasBoxedRegularStatics = 0x2000,
+            enum_flag_HasSingleNonVirtualSlot = 0x4000,
+        };
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MethodTable
+        {
+            public uint m_dwFlags;
+            public uint m_BaseSize;
+            public ushort m_wFlags2;
+            public ushort m_wToken;
+            public ushort m_wNumVirtuals;
+            public ushort m_wNumInterfaces;
+        }
+
         [StructLayout(LayoutKind.Explicit)]
         public struct CoreClrMethodDesc
         {
-            [FieldOffset(0)]
+            [FieldOffset(0x00)]
             public ushort m_wFlags3AndTokenRemainder;
 
-            [FieldOffset(2)]
+            [FieldOffset(0x02)]
             public byte m_chunkIndex;
 
-            [FieldOffset(0x3)]
+            [FieldOffset(0x03)]
             public byte m_bFlags2;
 
-            [FieldOffset(0x4)]
+            [FieldOffset(0x04)]
             public ushort m_wSlotNumber;
 
-            [FieldOffset(0x6)]
+            [FieldOffset(0x06)]
             public ushort m_wFlags;
 
-            [FieldOffset(0x8)]
+            [FieldOffset(0x08)]
             public ulong TempEntry;
         }
     }

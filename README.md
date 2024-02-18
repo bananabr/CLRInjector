@@ -63,5 +63,4 @@ PRs are always welcome!
 - [ ] Generic shellcode support
 - [ ] Migrate p/invoke calls to d/invoke
 - [ ] Cleanup code
-- [ ] Convert NGEN methods to JIT
-- [ ] Generic target method
+- [x] Support real slot in MethodTable

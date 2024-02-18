@@ -19,6 +19,7 @@ namespace CLRHeapWalker
         public const int PROCESS_ALL_ACCESS = 0x1F0FFF;
         public const int MAXIMUM_ALLOWED = 0x2000000;
         public const int PAGE_EXECUTE_READWRITE = 0x40;
+        public const int PAGE_READWRITE = 0x04;
         public const int MEM_COMMIT = 0x1000;
         public const int MEM_PRIVATE = 0x20000;
 
