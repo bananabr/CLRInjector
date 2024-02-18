@@ -60,3 +60,6 @@ PRs are always welcome!
 - [ ] Migrate p/invoke calls to d/invoke
 - [ ] Cleanup code
 - [x] Support real slot in MethodTable
+
+##
+[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/bananabr)
