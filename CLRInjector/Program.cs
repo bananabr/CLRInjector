@@ -15,7 +15,7 @@ namespace CLRHeapWalker
 
         static void Main(string[] args)
         {
-            if (args.Length < 1)
+            if (args.Length < 1 || args[0] == "--help" || args[0] == "-h")
             {
                 Console.WriteLine(@"
    _____ _      _____  _____       _           _             
@@ -34,7 +34,7 @@ namespace CLRHeapWalker
                 Console.WriteLine($"<pid|process_name> --dump-mt <method_table>");
                 Console.WriteLine($"<pid|process_name> --dump-md <method_desc>");
                 Console.WriteLine($"<pid|process_name> --dump-trampolines");
-                Console.WriteLine($"<pid|process_name> --inject <payload path> <method_desc> [cave]");
+                Console.WriteLine($"<pid|process_name> --inject <payload path> <trampoline_addr> [cave]");
                 Environment.Exit(1);
             }
 
@@ -261,9 +261,7 @@ namespace CLRHeapWalker
 
                                 if (caveAddr == 0)
                                 {
-                                    // I took a naive approach here moving loaderHeap.m_pAllocPtr to loaderHeap.m_pEndReservedRegion.
-                                    // This keeps the heap available and forces the JIT Manager to create a new heap for future allocations.
-                                    // There is still a chance of a race condition if loaderHeap.m_pAllocPtr is updated before its patched.
+                                    // There is a chance of a race condition if loaderHeap.m_pAllocPtr is updated before its patched.
                                     var loaderHeapAddr = getExplicitLoeaderHeapAddr(runtime);
                                     var loaderHeap = ReadMemoryData<ExplicitControlLoaderHeap>(hProcess, (IntPtr)(loaderHeapAddr));
                                     int requiredSize = prologue.Length +
