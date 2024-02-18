@@ -14,37 +14,33 @@ CLRInjector.exe --ps
 ```
 * Dump GC heap (similar to SOS.dll !dumpheap)
 ```
-CLRInjector.exe <target pid> --dump-heap
+CLRInjector.exe <pid|process_name> --dump-obj
 ```
 * Dump method tables (similar to SOS.dll !dumpmt)
 ```
-CLRInjector.exe <target pid> --dump-mt 0x1122334455667788
+CLRInjector.exe <pid|process_name> --dump-mt 0x1122334455667788
 ```
 * Dump method descriptor (similar to SOS.dll !dumpmd)
 ```
-CLRInjector.exe <target pid> --dump-md 0x1122334455667788
+CLRInjector.exe <pid|process_name> --dump-md 0x1122334455667788
 ```
-* Dump code caves (RWX memory segments)
+* Dump trampolines (injection targets)
 ```
-CLRInjector.exe <target pid> --dump-caves [cave size]
-```
-* List Jitted methods native code addresses
-```
-CLRInjector.exe <target pid> --find-jit
+CLRInjector.exe <pid|process_name> --dump-trampolines
 ```
 * Hook Jitted method and loads shellcode into preexisting RWX segment
 ```
-CLRInjector.exe <target pid> --jit-inject <shellcode_path> <method_native_code_address>
+CLRInjector.exe <pid|process_name> --inject <payload path> <method_desc>
 ```
 
 ### Usage example
 
-![Usage example](images/CLRThreadlessInjection.gif)
+![Usage example](images/CLRInjector.gif)
 
 ## Known issues
 
-* I took a naive approach moving the JIT Manager loader code heap m_pAllocPtr to its m_pEndReservedRegion. This keeps the heap available and forces the JIT Manager to create a new heap for future allocations. There is still a chance of a race condition if m_pAllocPtr is updated before its patched.
-* Shellcode must supports being called as a function and properly return, otherwise it may crash the target process. A generic stub that loads the shellcode on its own thread would most likely solve this.
+* To reserve space for the shellcode, the tool updates the JIT Manager loader code heap m_pAllocPtr. This keeps future JIT allocations from overwriting the payload. There is a chance of a race condition if m_pAllocPtr is updated by the JIT manager after its read but before its patched by the tool.
+* For now, the shellcode must support being called as a function and return, otherwise it may crash the target process. A generic stub that loads the shellcode on its own thread would most likely solve this.
 
 ## References
 
